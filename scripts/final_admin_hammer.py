@@ -126,9 +126,18 @@ def swap_ids(url):
 
 def idor_probe():
     apis = RAW/"discovered_apis.jsonl"
-    sessions = { json.loads(l)["host"]: json.loads(l)
-                 for l in RAW.open("r").read().splitlines()
-                 if l and l.startswith('{') } if (RAW/"sessions.jsonl").exists() else {}
+    # --- FIX: read sessions from the sessions.jsonl file in RAW, not RAW.open() on directory ---
+    sessions = {}
+    sp = RAW/"sessions.jsonl"
+    if sp.exists():
+        for l in sp.read_text().splitlines():
+            try:
+                s = json.loads(l)
+                if "host" in s:
+                    sessions[s["host"]] = s
+            except:
+                pass
+
     outp = FIND/"idor.jsonl"
     if not apis.exists(): return
     with open(outp,"w") as out, httpx.Client(timeout=8.0, follow_redirects=True) as cli:
@@ -138,7 +147,7 @@ def idor_probe():
             host,url = rec["host"], rec["url"]
             sess = sessions.get(host, {})
             ck = "; ".join([f'{c["name"]}={c.get("value","")}' for c in sess.get("cookies",[]) if c.get("name")])
-            hdr={"User-Agent":"FinalAdminLayer/1.0"}; 
+            hdr={"User-Agent":"FinalAdminLayer/1.0"}
             if ck: hdr["Cookie"]=ck
             for test_url in swap_ids(url):
                 try:
