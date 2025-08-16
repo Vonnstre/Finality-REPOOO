@@ -1,0 +1,13 @@
+14.admin-lite.airbnb.com
+aamk.admin-lite-next.airbnb.com
+admin-lite-staging.airbnb.com
+admin-lite-next.airbnb.com
+admin-lite.airbnb.com
+admin-next.airbnb.com
+admin-staging.airbnb.com
+admin.airbnb.com
+admin.dev.staging.airbnb.com
+admin.collabs.shopify.com
+admin-gtm.shopify.com
+admin.acronis.com
+admin.shopify.com
