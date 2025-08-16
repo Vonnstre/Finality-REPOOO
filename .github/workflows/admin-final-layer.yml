@@ -1,0 +1,121 @@
+name: Admin Final Layer (Scoped One-Click)
+
+on:
+  workflow_dispatch:
+    inputs:
+      attest:
+        description: "Type exactly: I have legal authorization"
+        required: true
+        default: ""
+      aggressive:
+        description: "Enable destructive tests (you toggle risk)"
+        required: true
+        default: "false"
+      rate_limit_per_host:
+        description: "Requests/sec per host"
+        required: true
+        default: "6"
+      global_concurrency:
+        description: "Parallel hosts"
+        required: true
+        default: "4"
+      nuclei_rate:
+        description: "nuclei rate limit"
+        required: true
+        default: "120"
+
+permissions:
+  contents: read
+
+env:
+  GOBIN: /home/runner/.local/bin
+  TMP_NUCLEI: /tmp/nuclei-templates
+  UA: "Mozilla/5.0 (FinalAdminLayer/1.0)"
+  OUTDIR: out
+  DRY_RUN: "true" # you can flip inside the UI later if you want; defaults safe
+
+jobs:
+  run:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scope gate
+        run: |
+          set -e
+          if [ "${{ github.event.inputs.attest }}" != "I have legal authorization" ]; then
+            echo "::error::Missing authorization attestation"; exit 1
+          fi
+          if [ ! -s admin-targets.txt ]; then
+            echo "::error::Place your authorized admin hosts in admin-targets.txt"; exit 1
+          fi
+          awk '{print NR": "$0}' admin-targets.txt
+
+      - name: Toolchain (Go, Python, Node, Chromium)
+        uses: actions/setup-go@v5
+        with: { go-version: '1.24.6' }
+      - run: |
+          set -euxo pipefail
+          sudo apt-get update -y || true
+          sudo apt-get install -y --no-install-recommends jq curl python3 python3-pip git unzip gcc \
+            chromium-browser xvfb libnss3 libatk1.0-0 libatk-bridge2.0-0 libx11-xcb1 libxcomposite1 \
+            libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2
+          pip3 install --user requests dnspython python-dateutil httpx==0.27.2 pandas
+          mkdir -p "${GOBIN}" && echo "${GOBIN}" >> "$GITHUB_PATH"
+          go env -w GOSUMDB=off || true
+          go env -w GOPROXY=https://proxy.golang.org,https://goproxy.io,direct || true
+          go install github.com/projectdiscovery/httpx/cmd/httpx@latest
+          go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+          go install github.com/ffuf/ffuf@latest
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Node deps
+        run: |
+          set -euxo pipefail
+          cd scripts
+          npm init -y >/dev/null 2>&1 || true
+          npm install puppeteer@22.7.1
+          cd -
+
+      - name: Fetch nuclei templates
+        run: |
+          set -euxo pipefail
+          rm -rf "${TMP_NUCLEI}"
+          git clone --depth 1 https://github.com/projectdiscovery/nuclei-templates "${TMP_NUCLEI}" || true
+          [ -d "${TMP_NUCLEI}" ] || (curl -fsSL https://github.com/projectdiscovery/nuclei-templates/archive/refs/heads/master.zip -o /tmp/nuclei.zip && unzip -q /tmp/nuclei.zip -d /tmp && mv /tmp/nuclei-templates-master "${TMP_NUCLEI}")
+          nuclei -update-templates || true
+
+      - name: Run Final Admin Hammer
+        env:
+          UA: ${{ env.UA }}
+          TMP_NUCLEI: ${{ env.TMP_NUCLEI }}
+          AGGRESSIVE: ${{ github.event.inputs.aggressive }}
+          RATE_LIMIT_PER_HOST: ${{ github.event.inputs.rate_limit_per_host }}
+          GLOBAL_CONCURRENCY: ${{ github.event.inputs.global_concurrency }}
+          NUCLEI_RATE: ${{ github.event.inputs.nuclei_rate }}
+          DRY_RUN: ${{ env.DRY_RUN }}
+          OUTDIR: ${{ env.OUTDIR }}
+        run: |
+          mkdir -p "$OUTDIR"
+          python3 scripts/final_admin_hammer.py \
+            --targets admin-targets.txt \
+            --ua "${UA}" \
+            --outdir "${OUTDIR}" \
+            --nuclei-templates "${TMP_NUCLEI}" \
+            --nuclei-rate "${NUCLEI_RATE}" \
+            --concurrency "${GLOBAL_CONCURRENCY}" \
+            --perhost-rate "${RATE_LIMIT_PER_HOST}" \
+            --aggressive "${AGGRESSIVE}" \
+            --dry-run "${DRY_RUN}"
+
+      - name: Build Markdown Reports
+        env:
+          OUTDIR: ${{ env.OUTDIR }}
+        run: |
+          python3 scripts/report_md.py --in "${OUTDIR}/findings" --evidence-root "${OUTDIR}/evidence" --out "${OUTDIR}/reports"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: admin-final-layer
+          path: out/**
